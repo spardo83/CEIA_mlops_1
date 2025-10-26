@@ -1,0 +1,81 @@
+# --- Python / entorno ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.log
+*.sqlite3
+*.db
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Archivos temporales
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.swp
+*.swo
+*.idea/
+.vscode/
+.cache/
+.ipynb_checkpoints/
+__MACOSX/
+
+# --- Data / Experimentos ---
+data/raw/
+data/processed/
+data/interim/
+notebooks/.ipynb_checkpoints/
+outputs/
+models/
+checkpoints/
+logs/
+mlruns/
+mlartifacts/
+
+# --- Airflow ---
+airflow/logs/
+airflow/tmp/
+airflow/dags/__pycache__/
+airflow/airflow.db
+airflow/unittests.cfg
+
+# --- Docker / Compose ---
+*.pid
+*.seed
+*.pid.lock
+*.log
+docker-compose.override.yml
+.env
+.env.local
+.env.dev
+.env.prod
+
+# --- MinIO / S3 simulaciones ---
+minio_data/
+s3_data/
+
+# --- VSCode / JetBrains ---
+.idea/
+.vscode/
+*.iml
+
+# --- System files ---
+*.tar
+*.zip
+*.gz
+*.7z
+*.rar
+
+# --- Otros ---
+reports/
+tests/__pycache__/
+__test__/
