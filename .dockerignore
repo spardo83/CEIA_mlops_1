@@ -1,0 +1,76 @@
+# --- Carpetas de entorno y cache ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+*.log
+*.db
+*.sqlite3
+.cache/
+.venv/
+venv/
+env/
+ENV/
+.ipynb_checkpoints/
+__MACOSX/
+
+# --- Archivos locales y de configuración ---
+.DS_Store
+.vscode/
+.idea/
+*.iml
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# --- Datos y modelos ---
+data/
+notebooks/
+outputs/
+logs/
+mlruns/
+mlartifacts/
+checkpoints/
+models/
+reports/
+tests/
+
+# --- Airflow ---
+airflow/logs/
+airflow/tmp/
+airflow/airflow.db
+
+# --- Archivos de entorno ---
+.env
+.env.*
+*.env
+!example.env
+!*.env.example
+
+# --- Archivos comprimidos y binarios ---
+*.tar
+*.zip
+*.gz
+*.7z
+*.rar
+
+# --- Archivos y carpetas del sistema ---
+Thumbs.db
+*.pid
+*.seed
+*.pid.lock
+
+# --- Docker y compose ---
+docker-compose.override.yml
+
+# --- Ignorar archivos del host que no se necesitan en el contenedor ---
+*.ipynb
+README.md
+
+# --- Permitidos explícitamente ---
+!requirements.txt
+!pyproject.toml
+!uv.lock
