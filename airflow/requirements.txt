@@ -1,0 +1,12 @@
+psycopg2-binary
+boto3
+cryptography
+pymysql
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+mlflow==2.10.2
+s3fs
+torch
