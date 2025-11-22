@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+COPY requirements.txt /requirements.txt
+
+# Minimal system deps and cleanup to keep the image slim
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir mlflow[extras] && \
+    pip install --no-cache-dir -r /requirements.txt
+
+EXPOSE 5000

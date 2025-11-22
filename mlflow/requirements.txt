@@ -1,0 +1,4 @@
+pandas
+ucimlrepo
+scikit-learn
+psycopg2-binary
