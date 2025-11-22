@@ -10,32 +10,9 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
-import mlflow
-import pandas as pd
 from airflow.decorators import dag, task
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import datetime
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    roc_auc_score,
-    roc_curve,
-)
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, label_binarize
-from sklearn.impute import SimpleImputer
-from sklearn.neural_network import MLPClassifier
-from sklearn.decomposition import PCA
-from mlflow.models import infer_signature
-from mlflow.tracking import MlflowClient
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
 
 DATA_DIR = Path("/opt/airflow/data/processed")
@@ -46,22 +23,6 @@ ORDERED_LABELS = ["zero", "low", "mid", "high"]
 MODEL_NAME = os.getenv("MODEL_NAME", "airbnb-occupancy-classifier")
 
 DEFAULT_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-
-
-class SimpleNN(nn.Module):
-    def __init__(self, in_features, out_features):
-        """Simple feed-forward network for multi-class classification."""
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_features, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, out_features)
-        )
-
-    def forward(self, x):
-        return self.net(x)
 
 
 @dag(schedule=None, start_date=datetime(2025, 1, 1), catchup=False, tags=["training", "mlflow", "mlops"])
@@ -77,6 +38,26 @@ def train_pipeline_dag():
     @task()
     def train_and_log(model_name: str, paths: Dict[str, str]) -> Dict[str, float]:
         """Train a model, log metrics/artifacts to MLflow, and return summary metrics."""
+        import pandas as pd
+        import mlflow
+        from sklearn.compose import ColumnTransformer
+        from sklearn.ensemble import GradientBoostingClassifier, VotingClassifier
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import (
+            accuracy_score,
+            confusion_matrix,
+            f1_score,
+            mean_absolute_error,
+            roc_auc_score,
+            roc_curve,
+        )
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import OneHotEncoder, StandardScaler, label_binarize
+        from sklearn.impute import SimpleImputer
+        from sklearn.neural_network import MLPClassifier
+        from sklearn.decomposition import PCA
+        from mlflow.models import infer_signature
+
         mlflow.set_tracking_uri(DEFAULT_TRACKING_URI)
         experiment_name = "airbnb-occupancy-classifier"
         try:
@@ -127,7 +108,6 @@ def train_pipeline_dag():
 
         models = {
             "logreg": LogisticRegression(max_iter=1000, multi_class="auto"),
-            "rf": RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1),
             "gboost": GradientBoostingClassifier(random_state=42),
             "mlp": MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=400, random_state=42),
             "pca_logreg": Pipeline(steps=[
@@ -139,10 +119,10 @@ def train_pipeline_dag():
         # Ensemble needs instantiated estimators
         if model_name == "ensemble":
             clf1 = LogisticRegression(max_iter=1000, multi_class="auto")
-            clf2 = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)
+            clf2 = GradientBoostingClassifier(random_state=42)
             clf3 = MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=400, random_state=42)
             estimator = VotingClassifier(
-                estimators=[('lr', clf1), ('rf', clf2), ('mlp', clf3)],
+                estimators=[('lr', clf1), ('gb', clf2), ('mlp', clf3)],
                 voting='soft'
             )
         elif model_name == "simplenn":
@@ -158,12 +138,31 @@ def train_pipeline_dag():
             
             if model_name == "simplenn":
                 # PyTorch
+                import torch
+                from torch import nn
+                from torch.utils.data import DataLoader, TensorDataset
+                from sklearn.preprocessing import LabelEncoder
+
+                class SimpleNN(nn.Module):
+                    def __init__(self, in_features, out_features):
+                        """Simple feed-forward network for multi-class classification."""
+                        super().__init__()
+                        self.net = nn.Sequential(
+                            nn.Linear(in_features, 128),
+                            nn.ReLU(),
+                            nn.Linear(128, 64),
+                            nn.ReLU(),
+                            nn.Linear(64, out_features)
+                        )
+
+                    def forward(self, x):
+                        return self.net(x)
+
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                 
                 X_train_t = torch.tensor(preprocess.fit_transform(X_train).astype('float32'))
                 X_test_t = torch.tensor(preprocess.transform(X_test).astype('float32'))
                 
-                from sklearn.preprocessing import LabelEncoder
                 le = LabelEncoder()
                 y_train_enc = le.fit_transform(y_train)
                 y_test_enc = le.transform(y_test)
@@ -259,6 +258,9 @@ def train_pipeline_dag():
     @task()
     def promote_best(best: Dict[str, str]) -> Dict[str, str]:
         """Register the selected model and transition it to Production."""
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
         mlflow.set_tracking_uri(DEFAULT_TRACKING_URI)
         client = MlflowClient(tracking_uri=DEFAULT_TRACKING_URI)
         model_uri = f"runs:/{best['run_id']}/model"
@@ -283,7 +285,7 @@ def train_pipeline_dag():
 
     data_paths = ensure_data()
     train_results = []
-    for name in ["logreg", "rf", "gboost", "mlp", "pca_logreg", "ensemble", "simplenn"]:
+    for name in ["logreg", "gboost", "mlp", "pca_logreg", "ensemble", "simplenn"]:
         train_task = train_and_log.override(task_id=f"train_{name}")(name, data_paths)
         run_preprocess >> data_paths >> train_task
         train_results.append(train_task)

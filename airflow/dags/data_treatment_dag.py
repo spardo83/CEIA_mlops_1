@@ -339,12 +339,13 @@ def impute_remaining(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.
 def data_treatment_dag():
     @task()
     def preprocess() -> Dict[str, str]:
+        """Run the data cleaning pipeline and persist train/test splits."""
         if RAW_DATA_URI.startswith("s3://"):
             df = pd.read_csv(RAW_DATA_URI, na_values=list(NA_TOKENS), storage_options=S3_STORAGE_OPTIONS)
         else:
             path = Path(RAW_DATA_URI)
             if not path.exists():
-                raise FileNotFoundError(f"No se encuentra el dataset en {RAW_DATA_URI}")
+                raise FileNotFoundError(f"Dataset not found at {RAW_DATA_URI}")
             df = pd.read_csv(path, na_values=list(NA_TOKENS))
         df = df.drop_duplicates(subset="id", keep="first")
         df = df.drop(columns=[c for c in DROP_COLS if c in df], errors="ignore")
