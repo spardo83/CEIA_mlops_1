@@ -16,6 +16,13 @@ x-airflow-common: &airflow-common
     AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
     AWS_ENDPOINT_URL_S3: http://s3:9000
     MLFLOW_S3_ENDPOINT_URL: http://s3:9000
+    # Explicitly use FAB Auth Manager (required for Airflow 3 + FAB provider)
+    AIRFLOW__CORE__AUTH_MANAGER: 'airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager'
+    # Point workers to the Execution API (mounted at /execution in Airflow 3)
+    AIRFLOW__CORE__INTERNAL_API_URL: 'http://airflow-webserver:8080/execution/'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-webserver:8080/execution/'
+    # Shared secret for internal API authentication (Critical for Airflow 3 distributed setup)
+    AIRFLOW__API_AUTH__JWT_SECRET: "super-secret-jwt-token-0987654321"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-./airflow}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-./airflow}/logs:/opt/airflow/logs
@@ -62,7 +69,7 @@ services:
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow_webserver
-    command: webserver
+    command: api-server
     ports:
       - "8080:8080"
     healthcheck:
@@ -106,6 +113,21 @@ services:
         condition: service_completed_successfully
 
   
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: airflow_dag_processor
+    command: dag-processor
+    healthcheck:
+      test: [ "CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"' ]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
   airflow-triggerer:
     <<: *airflow-common
     container_name: airflow_triggerer

@@ -322,7 +322,7 @@ def train_pipeline_dag():
                     X_train[:5].toarray(), estimator.predict(X_train[:5])
                 )
                 mlflow.sklearn.log_model(
-                    estimator, artifact_path="model", signature=signature
+                    estimator, "model", signature=signature
                 )
 
             # Metrics

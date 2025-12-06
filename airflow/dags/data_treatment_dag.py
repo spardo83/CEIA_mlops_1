@@ -22,12 +22,11 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import numpy as np
-import pandas as pd
 from airflow.decorators import dag, task
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import datetime
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+import pandas as pd
+import numpy as np
 
 
 RAW_DATA_URI = os.getenv("LISTINGS_S3_URI", "s3://listings/listings_big.csv")
@@ -453,7 +452,9 @@ def impute_remaining(
 def data_treatment_dag():
     @task()
     def preprocess() -> Dict[str, str]:
-        """Run the data cleaning pipeline and persist train/test splits."""
+        """Load data, clean, feature engineer, and split."""
+        from sklearn.model_selection import GroupShuffleSplit, train_test_split
+
         if RAW_DATA_URI.startswith("s3://"):
             df = pd.read_csv(
                 RAW_DATA_URI,
