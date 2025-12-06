@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Dict, List
 
 from airflow.decorators import dag, task
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import datetime
 
 
@@ -25,14 +24,22 @@ MODEL_NAME = os.getenv("MODEL_NAME", "airbnb-occupancy-classifier")
 DEFAULT_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 
 
-@dag(schedule=None, start_date=datetime(2025, 1, 1), catchup=False, tags=["training", "mlflow", "mlops"])
+@dag(
+    schedule=None,
+    start_date=datetime(2025, 1, 1),
+    catchup=False,
+    tags=["training", "mlflow", "mlops"],
+)
 def train_pipeline_dag():
     """Run preprocessing, train multiple models, and promote the selected one."""
+
     @task()
     def ensure_data() -> Dict[str, str]:
         """Ensure processed train/test CSV files exist before training."""
         if not TRAIN_PATH.exists() or not TEST_PATH.exists():
-            raise FileNotFoundError("Processed CSV files not found. Run data_treatment_dag first.")
+            raise FileNotFoundError(
+                "Processed CSV files not found. Run data_treatment_dag first."
+            )
         return {"train_path": str(TRAIN_PATH), "test_path": str(TEST_PATH)}
 
     @task()
@@ -55,7 +62,7 @@ def train_pipeline_dag():
         from sklearn.preprocessing import OneHotEncoder, StandardScaler, label_binarize
         from sklearn.impute import SimpleImputer
         from sklearn.neural_network import MLPClassifier
-        from sklearn.decomposition import PCA
+        from sklearn.decomposition import PCA, TruncatedSVD
         from mlflow.models import infer_signature
 
         mlflow.set_tracking_uri(DEFAULT_TRACKING_URI)
@@ -79,7 +86,9 @@ def train_pipeline_dag():
         y_test = test_df[TARGET]
 
         num_cols = X_train.select_dtypes(include=["number"]).columns.tolist()
-        cat_cols = X_train.select_dtypes(include=["object", "string", "category"]).columns.tolist()
+        cat_cols = X_train.select_dtypes(
+            include=["object", "string", "category"]
+        ).columns.tolist()
 
         preprocess = ColumnTransformer(
             transformers=[
@@ -109,21 +118,26 @@ def train_pipeline_dag():
         models = {
             "logreg": LogisticRegression(max_iter=1000, multi_class="auto"),
             "gboost": GradientBoostingClassifier(random_state=42),
-            "mlp": MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=400, random_state=42),
-            "pca_logreg": Pipeline(steps=[
-                ("pca", PCA(n_components=0.95, random_state=42, svd_solver="full")),
-                ("clf", LogisticRegression(max_iter=1000, multi_class="auto"))
-            ]),
+            "mlp": MLPClassifier(
+                hidden_layer_sizes=(128, 64), max_iter=400, random_state=42
+            ),
+            "pca_logreg": Pipeline(
+                steps=[
+                    ("pca", TruncatedSVD(n_components=50, random_state=42)),
+                    ("clf", LogisticRegression(max_iter=1000, multi_class="auto")),
+                ]
+            ),
         }
 
         # Ensemble needs instantiated estimators
         if model_name == "ensemble":
             clf1 = LogisticRegression(max_iter=1000, multi_class="auto")
             clf2 = GradientBoostingClassifier(random_state=42)
-            clf3 = MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=400, random_state=42)
+            clf3 = MLPClassifier(
+                hidden_layer_sizes=(128, 64), max_iter=400, random_state=42
+            )
             estimator = VotingClassifier(
-                estimators=[('lr', clf1), ('gb', clf2), ('mlp', clf3)],
-                voting='soft'
+                estimators=[("lr", clf1), ("gb", clf2), ("mlp", clf3)], voting="soft"
             )
         elif model_name == "simplenn":
             # Special case for PyTorch
@@ -135,13 +149,14 @@ def train_pipeline_dag():
             run_id = run.info.run_id
             mlflow.log_params({"model_name": model_name})
             proba = None
-            
+
             if model_name == "simplenn":
                 # PyTorch
                 import torch
                 from torch import nn
-                from torch.utils.data import DataLoader, TensorDataset
+                from torch.utils.data import DataLoader, Dataset
                 from sklearn.preprocessing import LabelEncoder
+                from scipy import sparse
 
                 class SimpleNN(nn.Module):
                     def __init__(self, in_features, out_features):
@@ -152,30 +167,57 @@ def train_pipeline_dag():
                             nn.ReLU(),
                             nn.Linear(128, 64),
                             nn.ReLU(),
-                            nn.Linear(64, out_features)
+                            nn.Linear(64, out_features),
                         )
 
                     def forward(self, x):
                         return self.net(x)
 
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                
-                X_train_t = torch.tensor(preprocess.fit_transform(X_train).astype('float32'))
-                X_test_t = torch.tensor(preprocess.transform(X_test).astype('float32'))
-                
+                class SparseDataset(Dataset):
+                    def __init__(self, X, y=None):
+                        self.X = X
+                        self.y = y
+
+                    def __len__(self):
+                        return self.X.shape[0]
+
+                    def __getitem__(self, idx):
+                        x_data = self.X[idx].toarray().squeeze()
+                        x_tensor = torch.tensor(x_data, dtype=torch.float32)
+                        if self.y is not None:
+                            return x_tensor, torch.tensor(self.y[idx], dtype=torch.long)
+                        return x_tensor
+
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+                # Fit transform returns sparse matrix now
+                X_train_processed = preprocess.fit_transform(X_train)
+                X_test_processed = preprocess.transform(X_test)
+
+                # Ensure CSR for efficient slicing
+                if not sparse.issparse(X_train_processed):
+                    X_train_processed = sparse.csr_matrix(X_train_processed)
+                else:
+                    X_train_processed = X_train_processed.tocsr()
+
+                if not sparse.issparse(X_test_processed):
+                    X_test_processed = sparse.csr_matrix(X_test_processed)
+                else:
+                    X_test_processed = X_test_processed.tocsr()
+
                 le = LabelEncoder()
                 y_train_enc = le.fit_transform(y_train)
                 y_test_enc = le.transform(y_test)
-                
-                y_train_t = torch.tensor(y_train_enc, dtype=torch.long)
-                
-                train_ds = TensorDataset(X_train_t, y_train_t)
+
+                train_ds = SparseDataset(X_train_processed, y_train_enc)
                 train_loader = DataLoader(train_ds, batch_size=256, shuffle=True)
-                
-                model = SimpleNN(X_train_t.shape[1], len(le.classes_)).to(device)
+
+                model = SimpleNN(X_train_processed.shape[1], len(le.classes_)).to(
+                    device
+                )
                 criterion = nn.CrossEntropyLoss()
                 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-                
+
                 model.train()
                 for epoch in range(20):
                     for xb, yb in train_loader:
@@ -185,38 +227,58 @@ def train_pipeline_dag():
                         loss = criterion(logits, yb)
                         loss.backward()
                         optimizer.step()
-                
+
                 model.eval()
+                # Batch prediction for test set to avoid OOM
+                test_ds = SparseDataset(X_test_processed)
+                test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
+
+                all_logits = []
                 with torch.no_grad():
-                    logits_test = model(X_test_t.to(device))
-                    proba = torch.softmax(logits_test, dim=1).cpu().numpy()
-                    preds_enc = proba.argmax(axis=1)
-                    preds = le.inverse_transform(preds_enc)
+                    for xb in test_loader:
+                        xb = xb.to(device)
+                        logits = model(xb)
+                        all_logits.append(logits)
+
+                logits_test = torch.cat(all_logits, dim=0)
+                proba = torch.softmax(logits_test, dim=1).cpu().numpy()
+                preds_enc = proba.argmax(axis=1)
+                preds = le.inverse_transform(preds_enc)
 
                 mlflow.pytorch.log_model(model, "model")
-                
+
             else:
                 # Sklearn
-                pipeline = Pipeline(steps=[("preprocess", preprocess), ("model", estimator)])
+                pipeline = Pipeline(
+                    steps=[("preprocess", preprocess), ("model", estimator)]
+                )
                 pipeline.fit(X_train, y_train)
                 preds = pipeline.predict(X_test)
-                proba = pipeline.predict_proba(X_test) if hasattr(pipeline, "predict_proba") else None
-                
-                signature = infer_signature(X_train.head(), pipeline.predict(X_train.head()))
-                mlflow.sklearn.log_model(pipeline, artifact_path="model", signature=signature)
+                proba = (
+                    pipeline.predict_proba(X_test)
+                    if hasattr(pipeline, "predict_proba")
+                    else None
+                )
+
+                signature = infer_signature(
+                    X_train.head(), pipeline.predict(X_train.head())
+                )
+                mlflow.sklearn.log_model(
+                    pipeline, artifact_path="model", signature=signature
+                )
 
             acc = accuracy_score(y_test, preds)
             f1_macro = f1_score(y_test, preds, average="macro")
-            labels_order: List[str] = [l for l in ORDERED_LABELS if l in set(y_train)] + [
-                l for l in sorted(pd.unique(y_train)) if l not in ORDERED_LABELS
-            ]
+            labels_order: List[str] = [
+                l for l in ORDERED_LABELS if l in set(y_train)
+            ] + [l for l in sorted(pd.unique(y_train)) if l not in ORDERED_LABELS]
             label_to_ord = {label: idx for idx, label in enumerate(labels_order)}
             y_test_ord = pd.Series(y_test).map(label_to_ord).astype(float)
             preds_ord = pd.Series(preds).map(label_to_ord).astype(float)
             mae = mean_absolute_error(y_test_ord, preds_ord)
             mlflow.log_metrics({"accuracy": acc, "f1_macro": f1_macro, "mae": mae})
 
-            # Confusion matrix 
+            # Confusion matrix
             cm = confusion_matrix(y_test, preds, labels=labels_order)
             mlflow.log_dict(
                 {"labels": labels_order, "matrix": cm.tolist()},
@@ -224,7 +286,11 @@ def train_pipeline_dag():
             )
 
             # ROC curves data (one-vs-rest) when probabilities are available
-            if proba is not None and len(labels_order) > 1 and proba.shape[1] == len(labels_order):
+            if (
+                proba is not None
+                and len(labels_order) > 1
+                and proba.shape[1] == len(labels_order)
+            ):
                 y_test_bin = label_binarize(y_test, classes=labels_order)
                 auc_ovr = roc_auc_score(y_test_bin, proba, multi_class="ovr")
                 mlflow.log_metric("roc_auc_ovr", auc_ovr)
@@ -277,17 +343,11 @@ def train_pipeline_dag():
             "mae": best["mae"],
         }
 
-    run_preprocess = TriggerDagRunOperator(
-        task_id="run_data_treatment",
-        trigger_dag_id="data_treatment_dag",
-        wait_for_completion=True,
-    )
-
     data_paths = ensure_data()
     train_results = []
     for name in ["logreg", "gboost", "mlp", "pca_logreg", "ensemble", "simplenn"]:
         train_task = train_and_log.override(task_id=f"train_{name}")(name, data_paths)
-        run_preprocess >> data_paths >> train_task
+        data_paths >> train_task
         train_results.append(train_task)
 
     best = select_best(train_results)

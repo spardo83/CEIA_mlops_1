@@ -25,18 +25,34 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from airflow.decorators import dag, task
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from pendulum import datetime
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 
 RAW_DATA_URI = os.getenv("LISTINGS_S3_URI", "s3://listings/listings_big.csv")
 S3_STORAGE_OPTIONS = {
-    "client_kwargs": {"endpoint_url": os.getenv("AWS_ENDPOINT_URL_S3", "http://s3:9000")}
+    "client_kwargs": {
+        "endpoint_url": os.getenv("AWS_ENDPOINT_URL_S3", "http://s3:9000")
+    }
 }
 PROCESSED_DIR = Path("/opt/airflow/data/processed")
 PROCESSED_S3_PREFIX = os.getenv("PROCESSED_S3_PREFIX", "s3://listings/processed")
 TARGET = "occupancy_level"
-NA_TOKENS = {"", " ", "nan", "NaN", "null", "Null", "NULL", "none", "None", "NONE", "-", "."}
+NA_TOKENS = {
+    "",
+    " ",
+    "nan",
+    "NaN",
+    "null",
+    "Null",
+    "NULL",
+    "none",
+    "None",
+    "NONE",
+    "-",
+    ".",
+}
 
 DROP_COLS = [
     "id",
@@ -70,13 +86,32 @@ def parse_dates(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
 
 
 def fix_booleans(df: pd.DataFrame) -> pd.DataFrame:
-    availability_cols = [c for c in ["availability_30", "availability_60", "availability_90", "availability_365"] if c in df]
-    availability_sum = df[availability_cols].sum(axis=1) if availability_cols else pd.Series(index=df.index, dtype=float)
-    has_availability_isna = df["has_availability"].isna() if "has_availability" in df else pd.Series(False, index=df.index)
+    availability_cols = [
+        c
+        for c in [
+            "availability_30",
+            "availability_60",
+            "availability_90",
+            "availability_365",
+        ]
+        if c in df
+    ]
+    availability_sum = (
+        df[availability_cols].sum(axis=1)
+        if availability_cols
+        else pd.Series(index=df.index, dtype=float)
+    )
+    has_availability_isna = (
+        df["has_availability"].isna()
+        if "has_availability" in df
+        else pd.Series(False, index=df.index)
+    )
     df.loc[has_availability_isna & (availability_sum != 0), "has_availability"] = "t"
     df.loc[has_availability_isna & (availability_sum == 0), "has_availability"] = "f"
 
-    df["was_evaluated_for_superhost"] = ~df.get("host_is_superhost", pd.Series(index=df.index)).isna()
+    df["was_evaluated_for_superhost"] = ~df.get(
+        "host_is_superhost", pd.Series(index=df.index)
+    ).isna()
 
     boolean_cols = [
         c
@@ -90,7 +125,9 @@ def fix_booleans(df: pd.DataFrame) -> pd.DataFrame:
         if c in df
     ]
     if boolean_cols:
-        df.loc[:, boolean_cols] = df.loc[:, boolean_cols].replace({True: "yes", False: "no", "t": "yes", "f": "no"})
+        df.loc[:, boolean_cols] = df.loc[:, boolean_cols].replace(
+            {True: "yes", False: "no", "t": "yes", "f": "no"}
+        )
     if "host_is_superhost" in df:
         df["host_is_superhost"] = df["host_is_superhost"].fillna("no")
     return df
@@ -112,29 +149,40 @@ def fill_neighbourhood(df: pd.DataFrame) -> pd.DataFrame:
 
 def reviews_block(df: pd.DataFrame) -> pd.DataFrame:
     review_score_columns = [c for c in df.columns if c.startswith("review_scores_")]
-    df[review_score_columns] = df[review_score_columns].apply(pd.to_numeric, errors="coerce")
+    df[review_score_columns] = df[review_score_columns].apply(
+        pd.to_numeric, errors="coerce"
+    )
 
     has_any_review_count = df.get("number_of_reviews", pd.Series(0, index=df.index)) > 0
     has_first_review_date = df.get("first_review", pd.Series(index=df.index)).notna()
     has_last_review_date = df.get("last_review", pd.Series(index=df.index)).notna()
-    has_reviews_per_month = (df.get("reviews_per_month", pd.Series(0, index=df.index)).fillna(0) > 0)
+    has_reviews_per_month = (
+        df.get("reviews_per_month", pd.Series(0, index=df.index)).fillna(0) > 0
+    )
 
     df["has_reviews_flag"] = (
-        has_any_review_count | has_first_review_date | has_last_review_date | has_reviews_per_month
+        has_any_review_count
+        | has_first_review_date
+        | has_last_review_date
+        | has_reviews_per_month
     ).astype("int8")
 
     if review_score_columns:
         df.loc[df["has_reviews_flag"] == 0, review_score_columns] = 0.0
 
     if "last_scraped" in df:
-        days_since_first_review = (df["last_scraped"] - df.get("first_review", pd.NaT)).dt.days
+        days_since_first_review = (
+            df["last_scraped"] - df.get("first_review", pd.NaT)
+        ).dt.days
         df["days_since_first_review"] = (
             days_since_first_review.where(df["has_reviews_flag"] == 1, -1)
             .fillna(-1)
             .clip(lower=-1)
             .astype("int32")
         )
-        days_since_last_review = (df["last_scraped"] - df.get("last_review", pd.NaT)).dt.days
+        days_since_last_review = (
+            df["last_scraped"] - df.get("last_review", pd.NaT)
+        ).dt.days
         df["days_since_last_review"] = (
             days_since_last_review.where(df["has_reviews_flag"] == 1, -1)
             .fillna(-1)
@@ -143,8 +191,13 @@ def reviews_block(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     if "reviews_per_month" in df:
-        df.loc[(df["has_reviews_flag"] == 0) & (df["reviews_per_month"].isna()), "reviews_per_month"] = 0.0
-    df = df.drop(columns=[c for c in ["first_review", "last_review"] if c in df], errors="ignore")
+        df.loc[
+            (df["has_reviews_flag"] == 0) & (df["reviews_per_month"].isna()),
+            "reviews_per_month",
+        ] = 0.0
+    df = df.drop(
+        columns=[c for c in ["first_review", "last_review"] if c in df], errors="ignore"
+    )
     return df
 
 
@@ -152,7 +205,9 @@ def parse_bathrooms(df: pd.DataFrame) -> pd.DataFrame:
     if "bathrooms" in df:
         df["bathrooms"] = pd.to_numeric(df["bathrooms"], errors="coerce")
     if "bathrooms_text" in df:
-        from_text = df["bathrooms_text"].astype(str).str.extract(r"([0-9]*\.?[0-9]+)")[0]
+        from_text = (
+            df["bathrooms_text"].astype(str).str.extract(r"([0-9]*\.?[0-9]+)")[0]
+        )
         df["bathrooms_text_num"] = pd.to_numeric(from_text, errors="coerce")
         if "bathrooms" in df:
             df["bathrooms"].fillna(df["bathrooms_text_num"], inplace=True)
@@ -166,7 +221,11 @@ def mode_impute_by(df: pd.DataFrame, target: str, ref: str) -> pd.DataFrame:
     if ref_no_na.empty:
         df[target] = df[target].fillna(df[target].median())
         return df
-    moda = df.dropna(subset=[target]).groupby(ref)[target].apply(lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
+    moda = (
+        df.dropna(subset=[target])
+        .groupby(ref)[target]
+        .apply(lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
+    )
     missing_idx = df[df[target].isna()].index
     df.loc[missing_idx, target] = df.loc[missing_idx, ref].map(moda)
     if df[target].isna().any():
@@ -174,9 +233,15 @@ def mode_impute_by(df: pd.DataFrame, target: str, ref: str) -> pd.DataFrame:
     return df
 
 
-def price_block(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def price_block(
+    df_train: pd.DataFrame, df_test: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     def to_numeric_price(series: pd.Series) -> pd.Series:
-        cleaned = series.astype(str).str.replace(r"[^\d\.]", "", regex=True).replace("", pd.NA)
+        cleaned = (
+            series.astype(str)
+            .str.replace(r"[^\d\.]", "", regex=True)
+            .replace("", pd.NA)
+        )
         return pd.to_numeric(cleaned, errors="coerce")
 
     for d in (df_train, df_test):
@@ -185,7 +250,9 @@ def price_block(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.DataF
 
     global_price_median = df_train["price_clean"].median()
     median_price_by_group = (
-        df_train.groupby(["neighbourhood_cleansed", "room_type"])["price_clean"].median().dropna()
+        df_train.groupby(["neighbourhood_cleansed", "room_type"])["price_clean"]
+        .median()
+        .dropna()
         if {"neighbourhood_cleansed", "room_type"}.issubset(df_train.columns)
         else pd.Series(dtype=float)
     )
@@ -198,18 +265,32 @@ def price_block(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.DataF
     def impute_price(df: pd.DataFrame) -> pd.Series:
         price = df["price_clean"].copy()
         if not median_price_by_group.empty:
-            group_key = list(zip(df.get("neighbourhood_cleansed", ""), df.get("room_type", "")))
-            price = price.fillna(pd.Series(group_key, index=df.index).map(median_price_by_group))
+            group_key = list(
+                zip(df.get("neighbourhood_cleansed", ""), df.get("room_type", ""))
+            )
+            price = price.fillna(
+                pd.Series(group_key, index=df.index).map(median_price_by_group)
+            )
         if not median_price_by_neigh.empty:
-            price = price.fillna(df.get("neighbourhood_cleansed", pd.Series(index=df.index)).map(median_price_by_neigh))
+            price = price.fillna(
+                df.get("neighbourhood_cleansed", pd.Series(index=df.index)).map(
+                    median_price_by_neigh
+                )
+            )
         price = price.fillna(global_price_median)
         return price
 
     for d in (df_train, df_test):
         d["price_imputed"] = impute_price(d)
-        accommodates = d.get("accommodates", pd.Series(1, index=d.index)).replace(0, 1).fillna(1)
-        d["price_per_person"] = (d["price_imputed"] / accommodates).replace([pd.NA, np.inf, -np.inf], np.nan)
-        d["price_per_person"] = d["price_per_person"].fillna(d["price_per_person"].median())
+        accommodates = (
+            d.get("accommodates", pd.Series(1, index=d.index)).replace(0, 1).fillna(1)
+        )
+        d["price_per_person"] = (d["price_imputed"] / accommodates).replace(
+            [pd.NA, np.inf, -np.inf], np.nan
+        )
+        d["price_per_person"] = d["price_per_person"].fillna(
+            d["price_per_person"].median()
+        )
         d.drop(columns=[c for c in ["price_clean"] if c in d], inplace=True)
     return df_train, df_test
 
@@ -241,12 +322,22 @@ def amenity_to_col(amenity: str) -> str:
     return f"amenity_{slug}" if slug else "amenity_other"
 
 
-def build_amenities(df_train: pd.DataFrame, df_test: pd.DataFrame, top_k: int = 20) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
-    amenity_lists_train = df_train["amenities"].apply(normalize_amenities) if "amenities" in df_train else pd.Series([], dtype=object)
+def build_amenities(
+    df_train: pd.DataFrame, df_test: pd.DataFrame, top_k: int = 20
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+    amenity_lists_train = (
+        df_train["amenities"].apply(normalize_amenities)
+        if "amenities" in df_train
+        else pd.Series([], dtype=object)
+    )
     amenity_counts = amenity_lists_train.explode().value_counts()
     top_amenities = amenity_counts.head(top_k)
 
-    df_train["amenities_count"] = amenity_lists_train.str.len().astype("int16") if not amenity_lists_train.empty else 0
+    df_train["amenities_count"] = (
+        amenity_lists_train.str.len().astype("int16")
+        if not amenity_lists_train.empty
+        else 0
+    )
     amenities_feature_cols: List[str] = []
     for amenity in top_amenities.index:
         base = amenity_to_col(amenity)
@@ -256,13 +347,21 @@ def build_amenities(df_train: pd.DataFrame, df_test: pd.DataFrame, top_k: int = 
             suffix += 1
             name = f"{base}_{suffix}"
         amenities_feature_cols.append(name)
-        df_train[name] = amenity_lists_train.apply(lambda items, t=amenity: int(t in items)).astype("int8")
+        df_train[name] = amenity_lists_train.apply(
+            lambda items, t=amenity: int(t in items)
+        ).astype("int8")
 
-    amenity_lists_test = df_test["amenities"].apply(normalize_amenities) if "amenities" in df_test else pd.Series([], dtype=object)
+    amenity_lists_test = (
+        df_test["amenities"].apply(normalize_amenities)
+        if "amenities" in df_test
+        else pd.Series([], dtype=object)
+    )
     if not amenity_lists_test.empty:
         df_test["amenities_count"] = amenity_lists_test.str.len().astype("int16")
         for amenity, col_name in zip(top_amenities.index, amenities_feature_cols):
-            df_test[col_name] = amenity_lists_test.apply(lambda items, t=amenity: int(t in items)).astype("int8")
+            df_test[col_name] = amenity_lists_test.apply(
+                lambda items, t=amenity: int(t in items)
+            ).astype("int8")
     for col in amenities_feature_cols:
         if col not in df_test:
             df_test[col] = 0
@@ -274,12 +373,18 @@ def build_amenities(df_train: pd.DataFrame, df_test: pd.DataFrame, top_k: int = 
     return df_train, df_test, amenities_feature_cols
 
 
-def build_target(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build_target(
+    df_train: pd.DataFrame, df_test: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     for d in (df_train, df_test):
-        occ = d.get("estimated_occupancy_l365d", pd.Series(index=d.index)).clip(lower=0, upper=365)
+        occ = d.get("estimated_occupancy_l365d", pd.Series(index=d.index)).clip(
+            lower=0, upper=365
+        )
         bins = [-1, 0, 30, 120, 366]
         labels = ["zero", "low", "mid", "high"]
-        d[TARGET] = pd.cut(occ, bins=bins, labels=labels, right=True, include_lowest=True)
+        d[TARGET] = pd.cut(
+            occ, bins=bins, labels=labels, right=True, include_lowest=True
+        )
     return df_train, df_test
 
 
@@ -314,9 +419,13 @@ def strip_leakage(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=drop, errors="ignore")
 
 
-def impute_remaining(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def impute_remaining(
+    df_train: pd.DataFrame, df_test: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     numeric_cols = df_train.select_dtypes(include=["number"]).columns.tolist()
-    cat_cols = df_train.select_dtypes(include=["object", "string", "category"]).columns.tolist()
+    cat_cols = df_train.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
     if TARGET in numeric_cols:
         numeric_cols.remove(TARGET)
     if TARGET in cat_cols:
@@ -335,13 +444,22 @@ def impute_remaining(df_train: pd.DataFrame, df_test: pd.DataFrame) -> Tuple[pd.
     return df_train, df_test
 
 
-@dag(schedule=None, start_date=datetime(2025, 1, 1), catchup=False, tags=["preprocess", "listings", "mlops"])
+@dag(
+    schedule=None,
+    start_date=datetime(2025, 1, 1),
+    catchup=False,
+    tags=["preprocess", "listings", "mlops"],
+)
 def data_treatment_dag():
     @task()
     def preprocess() -> Dict[str, str]:
         """Run the data cleaning pipeline and persist train/test splits."""
         if RAW_DATA_URI.startswith("s3://"):
-            df = pd.read_csv(RAW_DATA_URI, na_values=list(NA_TOKENS), storage_options=S3_STORAGE_OPTIONS)
+            df = pd.read_csv(
+                RAW_DATA_URI,
+                na_values=list(NA_TOKENS),
+                storage_options=S3_STORAGE_OPTIONS,
+            )
         else:
             path = Path(RAW_DATA_URI)
             if not path.exists():
@@ -351,7 +469,9 @@ def data_treatment_dag():
         df = df.drop(columns=[c for c in DROP_COLS if c in df], errors="ignore")
         df = df.drop(columns=[c for c in HIGH_NULL_COLS if c in df], errors="ignore")
 
-        df = parse_dates(df, ["last_scraped", "host_since", "first_review", "last_review"])
+        df = parse_dates(
+            df, ["last_scraped", "host_since", "first_review", "last_review"]
+        )
         df = fix_booleans(df)
         df = fill_neighbourhood(df)
         df = reviews_block(df)
@@ -360,7 +480,11 @@ def data_treatment_dag():
         df = mode_impute_by(df, target="beds", ref="room_type")
 
         if "host_since" in df and "last_scraped" in df:
-            df["host_days_active"] = (df["last_scraped"] - df["host_since"]).dt.days.fillna(-1).astype("int32")
+            df["host_days_active"] = (
+                (df["last_scraped"] - df["host_since"])
+                .dt.days.fillna(-1)
+                .astype("int32")
+            )
         if "host_id" in df:
             df["host_id"] = df["host_id"].fillna(-1)
 
@@ -400,7 +524,13 @@ def data_treatment_dag():
             "columns": df_train.columns.tolist(),
         }
 
-    preprocess()
+    trigger_train = TriggerDagRunOperator(
+        task_id="trigger_train_pipeline",
+        trigger_dag_id="train_pipeline_dag",
+        wait_for_completion=False,  # Fire and forget, or True if we want to wait
+    )
+
+    preprocess() >> trigger_train
 
 
 dag = data_treatment_dag()
