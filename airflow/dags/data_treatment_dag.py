@@ -504,17 +504,20 @@ def data_treatment_dag():
         df_train, df_test = impute_remaining(df_train, df_test)
 
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        train_path = PROCESSED_DIR / "train.csv"
-        test_path = PROCESSED_DIR / "test.csv"
-        df_train.to_csv(train_path, index=False)
-        df_test.to_csv(test_path, index=False)
+        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        train_path = PROCESSED_DIR / "train.parquet"
+        test_path = PROCESSED_DIR / "test.parquet"
+        df_train.to_parquet(train_path, index=False)
+        df_test.to_parquet(test_path, index=False)
 
         # También almacenamos en MinIO/S3 para consumo por otros servicios
         if PROCESSED_S3_PREFIX:
-            s3_train = f"{PROCESSED_S3_PREFIX.rstrip('/')}/train.csv"
-            s3_test = f"{PROCESSED_S3_PREFIX.rstrip('/')}/test.csv"
-            df_train.to_csv(s3_train, index=False, storage_options=S3_STORAGE_OPTIONS)
-            df_test.to_csv(s3_test, index=False, storage_options=S3_STORAGE_OPTIONS)
+            s3_train = f"{PROCESSED_S3_PREFIX.rstrip('/')}/train.parquet"
+            s3_test = f"{PROCESSED_S3_PREFIX.rstrip('/')}/test.parquet"
+            df_train.to_parquet(
+                s3_train, index=False, storage_options=S3_STORAGE_OPTIONS
+            )
+            df_test.to_parquet(s3_test, index=False, storage_options=S3_STORAGE_OPTIONS)
 
         return {
             "train_path": str(train_path),
