@@ -52,6 +52,7 @@ def train_pipeline_dag():
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
         from sklearn.impute import SimpleImputer
+        import joblib
 
         train_df = pd.read_parquet(paths["train_path"])
         test_df = pd.read_parquet(paths["test_path"])
@@ -115,6 +116,8 @@ def train_pipeline_dag():
         np.save(out_dir / "y_train.npy", y_train_enc)
         np.save(out_dir / "y_test.npy", y_test_enc)
         np.save(out_dir / "classes.npy", le.classes_)
+        # Save preprocessor
+        joblib.dump(preprocess, out_dir / "preprocessor.joblib")
 
         return {
             "X_train": str(out_dir / "X_train.npz"),
@@ -122,6 +125,7 @@ def train_pipeline_dag():
             "y_train": str(out_dir / "y_train.npy"),
             "y_test": str(out_dir / "y_test.npy"),
             "classes": str(out_dir / "classes.npy"),
+            "preprocessor": str(out_dir / "preprocessor.joblib"),
         }
 
     @task()
@@ -324,6 +328,10 @@ def train_pipeline_dag():
                 mlflow.sklearn.log_model(
                     estimator, "model", signature=signature
                 )
+            
+            # Log preprocessor
+            if "preprocessor" in paths and os.path.exists(paths["preprocessor"]):
+                mlflow.log_artifact(paths["preprocessor"], artifact_path="preprocessor")
 
             # Metrics
             acc = accuracy_score(y_test, preds)
@@ -429,7 +437,23 @@ def train_pipeline_dag():
         train_results.append(train_task)
 
     best = select_best(train_results)
-    promote_best(best)
+    promotion = promote_best(best)
+
+    @task()
+    def trigger_api_reload(promotion_result: Dict[str, str]):
+        """Call the prediction API to reload the model."""
+        import requests
+        try:
+            # We assume internal docker network name 'prediction-api' or 'prediction_api'
+            # Service name in docker-compose is prediction-api
+            resp = requests.post("http://prediction-api:8000/reload-model", timeout=10)
+            resp.raise_for_status()
+            print(f"API Reload triggered: {resp.json()}")
+        except Exception as e:
+            print(f"Warning: Failed to trigger API reload: {e}")
+            # Don't fail the DAG, just warn
+    
+    trigger_api_reload(promotion)
 
 
 dag = train_pipeline_dag()
