@@ -22,13 +22,15 @@ Este repositorio contiene un proyecto completo de MLOps para predecir el nivel d
 2.  **Acceder a las interfaces**:
 
     - **Airflow**: [http://localhost:8080](http://localhost:8080) (user: `airflow`, pass: `airflow`)
-    - **MLflow**: [http://localhost:5000](http://localhost:5000)
+    - **MLflow**: [http://localhost:5001](http://localhost:5001)
     - **API Swagger**: [http://localhost:8000/docs](http://localhost:8000/docs)
+    - **Frontend**: [http://localhost:5173](http://localhost:5173)
     - **MinIO**: [http://localhost:9001](http://localhost:9001) (user: `minio`, pass: `minio123`)
 
 3.  **Ejecutar el Pipeline**:
     - Ir a Airflow y activar el DAG `data_treatment_dag`.
     - Esto disparará automáticamente el `train_pipeline_dag` al finalizar.
+    - **Nota**: Al finalizar el entrenamiento, el DAG notifica a la API para que recargue automáticamente el nuevo modelo sin necesidad de reiniciar el contenedor.
 
 ## 📚 Documentación
 
@@ -37,6 +39,7 @@ Para detalles profundos sobre cada componente:
 - **[Arquitectura del Sistema](docs/architecture.md)**: Visión general de componentes y flujo de datos.
 - **[Pipelines de Datos y Entrenamiento](docs/pipelines.md)**: Explicación detallada de los DAGs de Airflow.
 - **[API de Predicción](docs/api.md)**: Guía de uso de la API REST y esquema de datos.
+- **[Aplicación Frontend](docs/frontend.md)**: Guía de uso de la interfaz gráfica de predicción.
 
 ## 💡 Contexto del Proyecto
 
@@ -48,6 +51,7 @@ El análisis exploratorio de datos (EDA) y la definición del problema se encuen
 
 - `airflow/`: DAGs y configuración de Airflow.
 - `api/`: Código fuente de la API de predicción (FastAPI).
+- `frontend/`: Código fuente de la aplicación React.
 - `mlflow/`: Dockerfile y configuración del servidor MLflow.
 - `docs/`: Documentación detallada.
 - `docker-compose.yml`: Definición de servicios.

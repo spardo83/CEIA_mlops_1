@@ -71,6 +71,8 @@ services:
   prediction-api:
     build:
       context: ./api
+      dockerfile: Dockerfile
+    image: ceia_mlops_1-prediction-api:latest
     container_name: prediction_api
     restart: always
     ports:
@@ -80,9 +82,28 @@ services:
       - MODEL_NAME=airbnb-occupancy-classifier
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - MLFLOW_S3_ENDPOINT_URL=http://s3:9000
     depends_on:
       - mlflow
+      - s3
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  predictions_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: predictions_frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - prediction-api
     networks:
       - backend
 

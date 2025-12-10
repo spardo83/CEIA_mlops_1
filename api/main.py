@@ -15,6 +15,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Enable CORS
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For dev simplicity. In prod, restrict to frontend domain.
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Global variables
 model = None
 preprocessor = None
